@@ -1,8 +1,8 @@
 // lib/widgets/document_editor_widget.dart
 import 'dart:io';
-import 'dart:ui' as ui;
+// import 'dart:ui' as ui; // <-- 1. REMOVED UNUSED IMPORT
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
+// import 'package:flutter/rendering.dart'; // <-- 1. REMOVED UNNECESSARY IMPORT
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 
 class DocumentEditorWidget extends StatefulWidget {
@@ -108,7 +108,7 @@ class _DocumentEditorWidgetState extends State<DocumentEditorWidget> {
   Widget _buildA4Sheet({required Widget child, bool showBorder = true}) {
     const double a4Width = 210.0; // A4 width in mm
     const double a4Height = 297.0; // A4 height in mm
-    const double scale = 2.0; // Scale factor for screen display
+    // const double scale = 2.0; // <-- 2. REMOVED UNUSED 'scale' VARIABLE
 
     final screenWidth = MediaQuery.of(context).size.width * 0.6;
     final aspectRatio = a4Width / a4Height;
@@ -123,7 +123,8 @@ class _DocumentEditorWidgetState extends State<DocumentEditorWidget> {
         borderRadius: BorderRadius.circular(8),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.2),
+            // 3. FIXED DEPRECATED 'withOpacity'
+            color: Colors.black.withAlpha(51), // This is 20% opacity
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -154,7 +155,7 @@ class _DocumentEditorWidgetState extends State<DocumentEditorWidget> {
   Widget _buildMultiPageLayout() {
     final pages = widget.pagesPerSheet;
     final columns = _getColumnsForPages(pages);
-    final rows = (pages / columns).ceil();
+    // final rows = (pages / columns).ceil(); // <-- 2. REMOVED UNUSED 'rows' VARIABLE
 
     return _buildA4Sheet(
       child: Padding(
@@ -320,7 +321,8 @@ class DocumentPreviewHeader extends StatelessWidget {
         border: Border.all(color: Colors.grey.shade200),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            // 3. FIXED DEPRECATED 'withOpacity'
+            color: Colors.black.withAlpha(13), // This is 5% opacity
             blurRadius: 4,
             offset: const Offset(0, 1),
           ),
@@ -341,12 +343,9 @@ class DocumentPreviewHeader extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
+                const Text(
                   'A4 Preview',
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 2),
                 Text(
