@@ -1,16 +1,73 @@
 // lib/screens/complete_printing_screen.dart
+
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-// Import all the components we created
-import '../widgets/document_editor_widget.dart';
-import '../widgets/page_management_widget.dart';
-import '../widgets/print_settings_widget.dart';
+// Import the simplified QR code widget
 import '../widgets/qr_code_widget.dart';
-import '../utils/document_utils.dart';
+
+// Simple data models to avoid dependency issues
+class PrintSettings {
+  final int copies;
+  final bool isMonochromatic;
+  final int pagesPerSheet; // Added pages per sheet
+  final String pageOrientation;
+
+  const PrintSettings({
+    this.copies = 1,
+    this.isMonochromatic = false,
+    this.pagesPerSheet = 1, // Default to 1 page per sheet
+    this.pageOrientation = 'portrait',
+  });
+
+  PrintSettings copyWith({
+    int? copies,
+    bool? isMonochromatic,
+    int? pagesPerSheet,
+    String? pageOrientation,
+  }) {
+    return PrintSettings(
+      copies: copies ?? this.copies,
+      isMonochromatic: isMonochromatic ?? this.isMonochromatic,
+      pagesPerSheet: pagesPerSheet ?? this.pagesPerSheet,
+      pageOrientation: pageOrientation ?? this.pageOrientation,
+    );
+  }
+
+  double calculateCost({required int totalPages}) {
+    final baseCost = totalPages * copies * (isMonochromatic ? 1.0 : 1.5);
+    return baseCost;
+  }
+}
+
+class DocumentMetadata {
+  final String fileName;
+  final int pageCount;
+  final String type; // 'photo' or 'pdf'
+
+  const DocumentMetadata({
+    required this.fileName,
+    required this.pageCount,
+    required this.type,
+  });
+}
+
+class PageItem {
+  final int id;
+  final int originalIndex;
+  final String type;
+  final File sourceFile;
+
+  const PageItem({
+    required this.id,
+    required this.originalIndex,
+    required this.type,
+    required this.sourceFile,
+  });
+}
 
 // Main application model
 class PrintingAppModel extends ChangeNotifier {
@@ -32,7 +89,6 @@ class PrintingAppModel extends ChangeNotifier {
   // UI state
   bool _isLoading = false;
   String? _errorMessage;
-  bool _showAdvancedSettings = false;
 
   // Getters
   File? get documentFile => _documentFile;
@@ -46,7 +102,6 @@ class PrintingAppModel extends ChangeNotifier {
   String? get paymentOrderId => _paymentOrderId;
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
-  bool get showAdvancedSettings => _showAdvancedSettings;
 
   double get totalCost {
     if (_documentMetadata == null) return 0.0;
@@ -63,14 +118,18 @@ class PrintingAppModel extends ChangeNotifier {
     _clearError();
 
     try {
-      // Validate document
-      final validation = await DocumentUtils.validateDocumentForPrinting(file);
-      if (!validation.isValid) {
-        throw Exception(validation.issues.join('\n'));
-      }
+      // Simple document analysis
+      final fileName = file.path.split('/').last;
+      final isPhoto =
+          fileName.toLowerCase().endsWith('.jpg') ||
+          fileName.toLowerCase().endsWith('.jpeg') ||
+          fileName.toLowerCase().endsWith('.png');
 
-      // Get metadata
-      final metadata = await DocumentUtils.getDocumentMetadata(file);
+      final metadata = DocumentMetadata(
+        fileName: fileName,
+        pageCount: isPhoto ? 1 : 5, // Simulate PDF with 5 pages
+        type: isPhoto ? 'photo' : 'pdf',
+      );
 
       // Initialize pages
       final pages = <PageItem>[];
@@ -79,7 +138,7 @@ class PrintingAppModel extends ChangeNotifier {
           PageItem(
             id: i,
             originalIndex: i,
-            type: metadata.type == DocumentType.photo ? 'photo' : 'pdf',
+            type: metadata.type,
             sourceFile: file,
           ),
         );
@@ -92,9 +151,8 @@ class PrintingAppModel extends ChangeNotifier {
       _selectedPageIndex = null;
 
       debugPrint('✓ Document initialized: ${metadata.fileName}');
-      debugPrint('  Type: ${metadata.type.name}');
-      debugPrint('  Pages: ${metadata.pageCount}');
-      debugPrint('  Size: ${DocumentUtils.formatFileSize(metadata.fileSize)}');
+      debugPrint(' Type: ${metadata.type}');
+      debugPrint(' Pages: ${metadata.pageCount}');
     } catch (e) {
       _setError('Failed to load document: $e');
     } finally {
@@ -115,47 +173,6 @@ class PrintingAppModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  void reorderPages(List<PageItem> newOrder) {
-    _pages = newOrder;
-    if (_currentPageIndex >= _pages.length) {
-      _currentPageIndex = _pages.length - 1;
-    }
-    notifyListeners();
-  }
-
-  void duplicatePage(int index) {
-    if (index >= 0 && index < _pages.length) {
-      final originalPage = _pages[index];
-      final newPage = PageItem(
-        id: DateTime.now().millisecondsSinceEpoch,
-        originalIndex: originalPage.originalIndex,
-        type: originalPage.type,
-        sourceFile: originalPage.sourceFile,
-        transformations: Map.from(originalPage.transformations),
-      );
-
-      _pages.insert(index + 1, newPage);
-      notifyListeners();
-    }
-  }
-
-  void deletePage(int index) {
-    if (index >= 0 && index < _pages.length && _pages.length > 1) {
-      _pages.removeAt(index);
-
-      if (_currentPageIndex >= _pages.length) {
-        _currentPageIndex = _pages.length - 1;
-      }
-      if (_selectedPageIndex == index) {
-        _selectedPageIndex = null;
-      } else if (_selectedPageIndex != null && _selectedPageIndex! > index) {
-        _selectedPageIndex = _selectedPageIndex! - 1;
-      }
-
-      notifyListeners();
-    }
-  }
-
   // Print settings
   void updatePrintSettings(PrintSettings settings) {
     _printSettings = settings;
@@ -167,8 +184,23 @@ class PrintingAppModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  void toggleAdvancedSettings() {
-    _showAdvancedSettings = !_showAdvancedSettings;
+  // Pages per sheet methods
+  void setPagesPerSheet(int value) {
+    if (value > 0 && value <= 4) {
+      _printSettings = _printSettings.copyWith(pagesPerSheet: value);
+      notifyListeners();
+    }
+  }
+
+  void setNumberOfCopies(int copies) {
+    if (copies > 0 && copies <= 50) {
+      _printSettings = _printSettings.copyWith(copies: copies);
+      notifyListeners();
+    }
+  }
+
+  void setIsMonochromatic(bool value) {
+    _printSettings = _printSettings.copyWith(isMonochromatic: value);
     notifyListeners();
   }
 
@@ -187,11 +219,10 @@ class PrintingAppModel extends ChangeNotifier {
       );
 
       final success = Random().nextDouble() > 0.05; // 95% success rate
-
       if (success) {
         _isPaymentVerified = true;
         debugPrint('✓ Payment verified: Order #$_paymentOrderId');
-        debugPrint('  Amount: ₹${totalCost.toStringAsFixed(2)}');
+        debugPrint(' Amount: ₹${totalCost.toStringAsFixed(2)}');
       } else {
         throw Exception('Payment verification failed');
       }
@@ -205,13 +236,6 @@ class PrintingAppModel extends ChangeNotifier {
     }
   }
 
-  void resetPayment() {
-    _isPaymentVerified = false;
-    _isVerifyingPayment = false;
-    _paymentOrderId = null;
-    notifyListeners();
-  }
-
   // Print execution
   Future<void> executePrint() async {
     if (!canPrint) return;
@@ -220,33 +244,12 @@ class PrintingAppModel extends ChangeNotifier {
     _clearError();
 
     try {
-      // Create print job
-      final printJob = PrintJob(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        documentName: _documentMetadata!.fileName,
-        configuration: PrintConfiguration(
-          copies: _printSettings.copies,
-          isMonochromatic: _printSettings.isMonochromatic,
-          paperSize: _printSettings.paperSize,
-          orientation: _printSettings.orientation,
-          quality: _printSettings.quality,
-          duplex: _printSettings.duplex,
-          selectedPages: _printSettings.printRange == 'all'
-              ? []
-              : _printSettings.customPages,
-        ),
-        createdAt: DateTime.now(),
-      );
-
-      // Add to print queue
-      final queueManager = PrintQueueManager();
-      final jobId = queueManager.addJob(printJob);
-
-      debugPrint('✓ Print job submitted: $jobId');
-      debugPrint('  Document: ${_documentMetadata!.fileName}');
-      debugPrint('  Pages: ${_pages.length}');
-      debugPrint('  Copies: ${_printSettings.copies}');
-      debugPrint('  Cost: ₹${totalCost.toStringAsFixed(2)}');
+      debugPrint('✓ Print job submitted');
+      debugPrint(' Document: ${_documentMetadata!.fileName}');
+      debugPrint(' Pages: ${_pages.length}');
+      debugPrint(' Copies: ${_printSettings.copies}');
+      debugPrint(' Pages per sheet: ${_printSettings.pagesPerSheet}');
+      debugPrint(' Cost: ₹${totalCost.toStringAsFixed(2)}');
 
       // Simulate processing
       await Future.delayed(const Duration(seconds: 2));
@@ -273,20 +276,9 @@ class PrintingAppModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  void reset() {
-    _documentFile = null;
-    _documentMetadata = null;
-    _pages.clear();
-    _currentPageIndex = 0;
-    _selectedPageIndex = null;
-    _printSettings = const PrintSettings();
-    _isPaymentVerified = false;
-    _isVerifyingPayment = false;
-    _paymentOrderId = null;
-    _isLoading = false;
-    _errorMessage = null;
-    _showAdvancedSettings = false;
-    notifyListeners();
+  // Public method to clear error (fix the access issue)
+  void clearError() {
+    _clearError();
   }
 }
 
@@ -302,7 +294,6 @@ class CompletePrintingScreen extends StatefulWidget {
 
 class _CompletePrintingScreenState extends State<CompletePrintingScreen> {
   late PrintingAppModel _model;
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   @override
   void initState() {
@@ -322,11 +313,9 @@ class _CompletePrintingScreenState extends State<CompletePrintingScreen> {
       child: Consumer<PrintingAppModel>(
         builder: (context, model, child) {
           return Scaffold(
-            key: _scaffoldKey,
             backgroundColor: Colors.grey.shade100,
             appBar: _buildAppBar(model),
             body: _buildBody(model),
-            endDrawer: _buildSettingsDrawer(model),
             floatingActionButton: _buildFloatingActionButton(model),
             bottomSheet: model.errorMessage != null
                 ? _buildErrorSheet(model)
@@ -342,7 +331,7 @@ class _CompletePrintingScreenState extends State<CompletePrintingScreen> {
       title: Row(
         children: [
           Icon(
-            model.documentMetadata?.type == DocumentType.photo
+            model.documentMetadata?.type == 'photo'
                 ? Icons.image
                 : Icons.picture_as_pdf,
             color: Colors.white,
@@ -365,7 +354,7 @@ class _CompletePrintingScreenState extends State<CompletePrintingScreen> {
         // Page counter
         if (model.pages.isNotEmpty)
           Container(
-            margin: const EdgeInsets.only(right: 8, top: 8, bottom: 8),
+            margin: const EdgeInsets.only(right: 16, top: 8, bottom: 8),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
               color: Colors.white.withAlpha(51),
@@ -376,13 +365,6 @@ class _CompletePrintingScreenState extends State<CompletePrintingScreen> {
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
             ),
           ),
-
-        // Settings menu
-        IconButton(
-          onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
-          icon: const Icon(Icons.settings),
-          tooltip: 'Print Settings',
-        ),
       ],
     );
   }
@@ -430,8 +412,7 @@ class _CompletePrintingScreenState extends State<CompletePrintingScreen> {
       children: [
         // Left panel - Document preview
         Expanded(flex: 3, child: _buildDocumentPreview(model)),
-
-        // Right panel - Page management and controls
+        // Right panel - Controls
         Container(
           width: 350,
           decoration: BoxDecoration(
@@ -460,27 +441,53 @@ class _CompletePrintingScreenState extends State<CompletePrintingScreen> {
       child: Column(
         children: [
           // Preview header
-          EnhancedDocumentPreviewHeader(
-            fileName: model.documentMetadata?.fileName ?? 'Unknown',
-            isMonochromatic: model.printSettings.isMonochromatic,
-            currentPage: model.currentPageIndex,
-            totalPages: model.pages.length,
-            documentType: model.documentMetadata?.type.name ?? 'unknown',
-            onPreviousPage: model.currentPageIndex > 0
-                ? () => model.setCurrentPage(model.currentPageIndex - 1)
-                : null,
-            onNextPage: model.currentPageIndex < model.pages.length - 1
-                ? () => model.setCurrentPage(model.currentPageIndex + 1)
-                : null,
-            onResetSettings: model.resetPrintSettings,
-          ),
-
+          _buildPreviewHeader(model),
           // Main preview area
           Expanded(
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: _buildA4Preview(model),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPreviewHeader(PrintingAppModel model) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(12),
+          topRight: Radius.circular(12),
+        ),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            onPressed: model.currentPageIndex > 0
+                ? () => model.setCurrentPage(model.currentPageIndex - 1)
+                : null,
+            icon: const Icon(Icons.chevron_left),
+          ),
+          Expanded(
+            child: Center(
+              child: Text(
+                'Page ${model.currentPageIndex + 1}',
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+          IconButton(
+            onPressed: model.currentPageIndex < model.pages.length - 1
+                ? () => model.setCurrentPage(model.currentPageIndex + 1)
+                : null,
+            icon: const Icon(Icons.chevron_right),
           ),
         ],
       ),
@@ -521,23 +528,42 @@ class _CompletePrintingScreenState extends State<CompletePrintingScreen> {
                 children: [
                   // Grid background
                   Positioned.fill(child: CustomPaint(painter: GridPainter())),
-
-                  // Document editor
+                  // Document preview
                   if (model.pages.isNotEmpty)
-                    EnhancedDocumentEditorWidget(
-                      documentFile:
-                          model.pages[model.currentPageIndex].sourceFile,
-                      pageIndex: model.currentPageIndex,
-                      transformation: PageTransformation(
-                        isSelected:
-                            model.selectedPageIndex == model.currentPageIndex,
-                      ),
-                      isMonochromatic: model.printSettings.isMonochromatic,
-                      containerSize: Size(sheetWidth, sheetHeight),
-                      onTap: () => model.selectPage(
-                        model.selectedPageIndex == model.currentPageIndex
-                            ? null
-                            : model.currentPageIndex,
+                    Center(
+                      child: Container(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              model.pages[model.currentPageIndex].type ==
+                                      'photo'
+                                  ? Icons.image
+                                  : Icons.picture_as_pdf,
+                              size: 100,
+                              color: Colors.blue.shade300,
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'Page ${model.currentPageIndex + 1}',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.blue.shade600,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              model.pages[model.currentPageIndex].type
+                                  .toUpperCase(),
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                 ],
@@ -550,28 +576,203 @@ class _CompletePrintingScreenState extends State<CompletePrintingScreen> {
   }
 
   Widget _buildControlPanel(PrintingAppModel model) {
+    return SingleChildScrollView(
+      child: Column(
+        children: [_buildPrintSettings(model), _buildPaymentSection(model)],
+      ),
+    );
+  }
+
+  Widget _buildPrintSettings(PrintingAppModel model) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Print Settings',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.blue.shade700,
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Number of Copies
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Copies:',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              Row(
+                children: [
+                  IconButton(
+                    onPressed: model.printSettings.copies > 1
+                        ? () => model.setNumberOfCopies(
+                            model.printSettings.copies - 1,
+                          )
+                        : null,
+                    icon: const Icon(Icons.remove, size: 18),
+                  ),
+                  Container(
+                    width: 40,
+                    alignment: Alignment.center,
+                    child: Text(
+                      '${model.printSettings.copies}',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: model.printSettings.copies < 50
+                        ? () => model.setNumberOfCopies(
+                            model.printSettings.copies + 1,
+                          )
+                        : null,
+                    icon: const Icon(Icons.add, size: 18),
+                  ),
+                ],
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 16),
+
+          // Pages Per Sheet Selector
+          _buildPagesPerSheetSelector(model),
+
+          const SizedBox(height: 16),
+
+          // Color Mode
+          const Text(
+            'Color Mode',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: _buildToggleButton(
+                  'Color',
+                  Icons.color_lens,
+                  !model.printSettings.isMonochromatic,
+                  () => model.setIsMonochromatic(false),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _buildToggleButton(
+                  'B&W',
+                  Icons.filter_b_and_w,
+                  model.printSettings.isMonochromatic,
+                  () => model.setIsMonochromatic(true),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPagesPerSheetSelector(PrintingAppModel model) {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Page management
-        Expanded(
-          flex: 2,
-          child: PageManagementWidget(
-            pages: model.pages,
-            selectedPageIndex: model.selectedPageIndex,
-            onPagesReordered: model.reorderPages,
-            onPageSelected: (index) {
-              model.setCurrentPage(index);
-              model.selectPage(index);
-            },
-            onPageDuplicated: model.duplicatePage,
-            onPageDeleted: model.deletePage,
-            itemHeight: 70,
+        Text(
+          'Pages per Sheet',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: Colors.grey[800],
           ),
         ),
-
-        // Payment section
-        Expanded(flex: 1, child: _buildPaymentSection(model)),
+        const SizedBox(height: 8),
+        Row(
+          children: [1, 2, 3, 4].map((pages) {
+            return Expanded(
+              child: GestureDetector(
+                onTap: () => model.setPagesPerSheet(pages),
+                child: Container(
+                  margin: EdgeInsets.only(right: pages < 4 ? 8 : 0),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  decoration: BoxDecoration(
+                    color: model.printSettings.pagesPerSheet == pages
+                        ? Theme.of(context).primaryColor
+                        : Colors.grey[200],
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: model.printSettings.pagesPerSheet == pages
+                          ? Theme.of(context).primaryColor
+                          : Colors.grey[300]!,
+                    ),
+                  ),
+                  child: Text(
+                    '$pages',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: model.printSettings.pagesPerSheet == pages
+                          ? Colors.white
+                          : Colors.grey[700],
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
       ],
+    );
+  }
+
+  Widget _buildToggleButton(
+    String label,
+    IconData icon,
+    bool isSelected,
+    VoidCallback onTap,
+  ) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.blue.shade600 : Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isSelected ? Colors.blue.shade600 : Colors.grey.shade300,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: isSelected ? Colors.white : Colors.grey.shade600,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: isSelected ? Colors.white : Colors.grey.shade600,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -629,17 +830,15 @@ class _CompletePrintingScreenState extends State<CompletePrintingScreen> {
 
           // Payment section
           if (!model.isPaymentVerified) ...[
-            // QR code
+            // Dynamic QR code
             Center(
-              child: PrintShopQrWidget(
-                amount: model.totalCost,
-                pages: model.pages.length,
-                copies: model.printSettings.copies,
-                isColor: !model.printSettings.isMonochromatic,
-                orderId: model.paymentOrderId,
+              child: QrCodeWidget(
+                data:
+                    'upi://pay?pa=merchant@paytm&pn=PrintShop&am=${model.totalCost.toStringAsFixed(2)}&cu=INR&tn=Document Print Payment',
+                showPaymentInfo: true,
+                size: 180,
               ),
             ),
-
             const SizedBox(height: 16),
 
             // Verify payment button
@@ -696,19 +895,6 @@ class _CompletePrintingScreenState extends State<CompletePrintingScreen> {
     );
   }
 
-  Widget _buildSettingsDrawer(PrintingAppModel model) {
-    return Drawer(
-      width: 400,
-      child: PrintSettingsWidget(
-        settings: model.printSettings,
-        totalPages: model.pages.length,
-        onSettingsChanged: model.updatePrintSettings,
-        onResetSettings: model.resetPrintSettings,
-        showAdvancedOptions: model.showAdvancedSettings,
-      ),
-    );
-  }
-
   Widget _buildFloatingActionButton(PrintingAppModel model) {
     if (!model.canPrint) return const SizedBox.shrink();
 
@@ -750,7 +936,7 @@ class _CompletePrintingScreenState extends State<CompletePrintingScreen> {
             ),
           ),
           TextButton(
-            onPressed: () => model._clearError(),
+            onPressed: () => model.clearError(), // Fixed: removed underscore
             child: const Text('Dismiss'),
           ),
         ],
@@ -782,103 +968,4 @@ class GridPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-// Usage example in main app
-class PrintingApp extends StatelessWidget {
-  const PrintingApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Digital Print Shop',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-        visualDensity: VisualDensity.adaptivePlatformDensity,
-      ),
-      home: const DocumentSelectionScreen(),
-    );
-  }
-}
-
-class DocumentSelectionScreen extends StatelessWidget {
-  const DocumentSelectionScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Select Document'),
-        backgroundColor: Colors.blue.shade700,
-        foregroundColor: Colors.white,
-      ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.upload_file, size: 64, color: Colors.grey.shade400),
-            const SizedBox(height: 16),
-            const Text(
-              'Select a document to print',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
-            ),
-            const SizedBox(height: 32),
-            ElevatedButton.icon(
-              onPressed: () => _selectDocument(context),
-              icon: const Icon(Icons.folder_open),
-              label: const Text('Browse Files'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue.shade600,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 32,
-                  vertical: 16,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _selectDocument(BuildContext context) {
-    // In a real app, you would use file_picker package here
-    // For this example, we'll simulate selecting a file
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Demo Mode'),
-        content: const Text(
-          'In a real application, this would open a file picker. '
-          'For this demo, we\'ll simulate loading a document.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              _openPrintingScreen(context);
-            },
-            child: const Text('Continue with Demo'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _openPrintingScreen(BuildContext context) {
-    // Create a dummy file for demo purposes
-    // In a real app, this would be the selected file
-    final demoFile = File('/demo/sample_document.pdf');
-
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => CompletePrintingScreen(documentFile: demoFile),
-      ),
-    );
-  }
 }

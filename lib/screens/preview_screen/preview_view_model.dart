@@ -1,15 +1,17 @@
 // lib/screens/preview_screen/preview_view_model.dart
+
 import 'dart:io';
-import 'dart:math';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 
 class PreviewViewModel extends ChangeNotifier {
   // Print settings
   int _numberOfCopies = 1;
   bool _isMonochromatic = false;
+  int _pagesPerSheet = 1; // Pages per sheet support
 
   // Advanced settings
-  String _pageOrientation = 'portrait'; // portrait, landscape
+  String _pageOrientation = 'portrait';
   bool _autoFit = true;
   double _brightness = 0.0;
   double _contrast = 0.0;
@@ -18,6 +20,11 @@ class PreviewViewModel extends ChangeNotifier {
   bool _isPaymentVerified = false;
   bool _isVerifyingPayment = false;
 
+  // Document info
+  int _totalPages = 1;
+  List<bool> _pageSelections = [];
+  String _documentType = 'photo';
+
   // Performance optimization
   bool _isUpdating = false;
 
@@ -25,14 +32,10 @@ class PreviewViewModel extends ChangeNotifier {
   static const double _baseCostPerPage = 1.0;
   static const double _colorSurcharge = 0.5;
 
-  // New properties for enhanced functionality
-  int _totalPages = 1;
-  List<bool> _pageSelections = [];
-  String _documentType = 'photo'; // 'photo' or 'pdf'
-
   // Getters
   int get numberOfCopies => _numberOfCopies;
   bool get isMonochromatic => _isMonochromatic;
+  int get pagesPerSheet => _pagesPerSheet;
   String get pageOrientation => _pageOrientation;
   bool get autoFit => _autoFit;
   double get brightness => _brightness;
@@ -44,36 +47,35 @@ class PreviewViewModel extends ChangeNotifier {
   List<bool> get pageSelections => List.unmodifiable(_pageSelections);
   String get documentType => _documentType;
 
+  // Total cost calculation with volume discounts
   double get totalCost {
-    double baseCost = _totalPages * _numberOfCopies * _baseCostPerPage;
-    double colorCost = _isMonochromatic
+    final effectivePages = selectedPagesCount > 0
+        ? selectedPagesCount
+        : _totalPages;
+    final baseCost = effectivePages * _numberOfCopies * _baseCostPerPage;
+    final colorCost = _isMonochromatic
         ? 0.0
-        : _totalPages * _numberOfCopies * _colorSurcharge;
+        : effectivePages * _numberOfCopies * _colorSurcharge;
 
-    // Volume discount for multiple pages
+    // Volume discount
     double discount = 0.0;
-    if (_totalPages > 5) {
-      discount = baseCost * 0.05; // 5% discount for 6+ pages
-    } else if (_totalPages > 10) {
-      discount = baseCost * 0.10; // 10% discount for 11+ pages
+    if (effectivePages > 10) {
+      discount = baseCost * 0.10;
+    } else if (effectivePages > 5) {
+      discount = baseCost * 0.05;
     }
 
     return (baseCost + colorCost - discount).clamp(0.0, double.infinity);
   }
 
-  // Performance optimized notification
-  void _notifyListeners() {
-    if (!_isUpdating) {
-      notifyListeners();
-    }
-  }
+  int get selectedPagesCount =>
+      _pageSelections.where((selected) => selected).length;
 
-  void _batchUpdate(VoidCallback updates) {
-    _isUpdating = true;
-    updates();
-    _isUpdating = false;
-    notifyListeners();
-  }
+  bool get canPrint =>
+      _isPaymentVerified &&
+      _numberOfCopies > 0 &&
+      !_isVerifyingPayment &&
+      _totalPages > 0;
 
   // Document setup
   void setDocumentInfo({
@@ -84,58 +86,45 @@ class PreviewViewModel extends ChangeNotifier {
       _totalPages = totalPages;
       _documentType = documentType;
       _pageSelections = List.filled(totalPages, false);
-      _notifyListeners();
+      notifyListeners();
     }
   }
 
-  void togglePageSelection(int pageIndex) {
-    if (pageIndex >= 0 && pageIndex < _pageSelections.length) {
-      _pageSelections[pageIndex] = !_pageSelections[pageIndex];
-      _notifyListeners();
+  // Pages per sheet setter
+  void setPagesPerSheet(int value) {
+    if (value > 0 && value <= 4 && value != _pagesPerSheet) {
+      _pagesPerSheet = value;
+      notifyListeners();
     }
   }
-
-  void selectAllPages() {
-    _pageSelections = List.filled(_totalPages, true);
-    _notifyListeners();
-  }
-
-  void deselectAllPages() {
-    _pageSelections = List.filled(_totalPages, false);
-    _notifyListeners();
-  }
-
-  int get selectedPagesCount =>
-      _pageSelections.where((selected) => selected).length;
 
   // Print option setters
   void setNumberOfCopies(int value) {
     if (value > 0 && value <= 100 && value != _numberOfCopies) {
       _numberOfCopies = value;
-      _notifyListeners();
+      notifyListeners();
     }
   }
 
   void setIsMonochromatic(bool value) {
     if (value != _isMonochromatic) {
       _isMonochromatic = value;
-      _notifyListeners();
+      notifyListeners();
     }
   }
 
-  // Advanced setters
   void setPageOrientation(String orientation) {
     if (orientation != _pageOrientation &&
         ['portrait', 'landscape'].contains(orientation)) {
       _pageOrientation = orientation;
-      _notifyListeners();
+      notifyListeners();
     }
   }
 
   void setAutoFit(bool value) {
     if (value != _autoFit) {
       _autoFit = value;
-      _notifyListeners();
+      notifyListeners();
     }
   }
 
@@ -143,7 +132,7 @@ class PreviewViewModel extends ChangeNotifier {
     final clampedValue = value.clamp(-1.0, 1.0);
     if (clampedValue != _brightness) {
       _brightness = clampedValue;
-      _notifyListeners();
+      notifyListeners();
     }
   }
 
@@ -151,48 +140,33 @@ class PreviewViewModel extends ChangeNotifier {
     final clampedValue = value.clamp(-1.0, 1.0);
     if (clampedValue != _contrast) {
       _contrast = clampedValue;
-      _notifyListeners();
+      notifyListeners();
     }
   }
 
-  // Quick presets
-  void applyPreset(String preset) {
-    _batchUpdate(() {
-      switch (preset) {
-        case 'draft':
-          _isMonochromatic = true;
-          _brightness = -0.2;
-          _contrast = -0.1;
-          break;
-        case 'normal':
-          _isMonochromatic = false;
-          _brightness = 0.0;
-          _contrast = 0.0;
-          break;
-        case 'high_quality':
-          _isMonochromatic = false;
-          _brightness = 0.1;
-          _contrast = 0.2;
-          break;
-        case 'economical':
-          _isMonochromatic = true;
-          _brightness = -0.1;
-          _contrast = -0.2;
-          break;
-      }
-    });
+  // Page selection methods
+  void togglePageSelection(int pageIndex) {
+    if (pageIndex >= 0 && pageIndex < _pageSelections.length) {
+      _pageSelections[pageIndex] = !_pageSelections[pageIndex];
+      notifyListeners();
+    }
   }
 
-  // Page manipulation methods
-  void duplicatePage(int pageIndex) {
-    // This would need to be handled in the UI layer
-    // as it involves manipulating the page data list
+  void selectAllPages() {
+    _pageSelections = List.filled(_totalPages, true);
     notifyListeners();
   }
 
-  void deletePage(int pageIndex) {
-    // This would need to be handled in the UI layer
+  void deselectAllPages() {
+    _pageSelections = List.filled(_totalPages, false);
     notifyListeners();
+  }
+
+  void setPageSelection(int pageIndex, bool isSelected) {
+    if (pageIndex >= 0 && pageIndex < _pageSelections.length) {
+      _pageSelections[pageIndex] = isSelected;
+      notifyListeners();
+    }
   }
 
   // Enhanced payment methods
@@ -203,24 +177,21 @@ class PreviewViewModel extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // Simulate realistic payment verification with network delay
+      // Simulate realistic payment verification
       await Future.delayed(
-        Duration(milliseconds: 2000 + Random().nextInt(1000)),
+        Duration(milliseconds: 2000 + math.Random().nextInt(1000)),
       );
 
-      // Simulate payment gateway response with higher success rate
-      final random = Random();
-      final success = random.nextDouble() > 0.05; // 95% success rate
-
+      final success = math.Random().nextDouble() > 0.05; // 95% success rate
       if (success) {
         _isPaymentVerified = true;
         debugPrint('✓ Payment verified successfully');
-        debugPrint('  Amount: ₹${totalCost.toStringAsFixed(2)}');
-        debugPrint('  Pages: $_totalPages');
-        debugPrint('  Copies: $_numberOfCopies');
-        debugPrint('  Mode: ${_isMonochromatic ? "B&W" : "Color"}');
+        debugPrint(' Amount: ₹${totalCost.toStringAsFixed(2)}');
+        debugPrint(' Pages: $_totalPages');
+        debugPrint(' Pages per sheet: $_pagesPerSheet');
+        debugPrint(' Copies: $_numberOfCopies');
+        debugPrint(' Mode: ${_isMonochromatic ? "B&W" : "Color"}');
       } else {
-        debugPrint('✗ Payment verification failed');
         throw Exception('Payment verification failed. Please try again.');
       }
     } catch (e) {
@@ -241,98 +212,39 @@ class PreviewViewModel extends ChangeNotifier {
     }
   }
 
-  // Enhanced print method with better validation
-  Future<void> printDocument(File documentFile) async {
-    if (!canPrint) {
-      throw Exception('Cannot print: ${_getCannotPrintReason()}');
-    }
-
-    try {
-      debugPrint('=== ENHANCED PRINT JOB ===');
-      debugPrint('Document: ${documentFile.path.split('/').last}');
-      debugPrint('Type: $_documentType');
-      debugPrint('File size: ${await documentFile.length()} bytes');
-      debugPrint('Configuration:');
-      debugPrint('  - Total pages: $_totalPages');
-      debugPrint(
-        '  - Selected pages: ${selectedPagesCount > 0 ? selectedPagesCount : _totalPages}',
-      );
-      debugPrint('  - Copies per page: $_numberOfCopies');
-      debugPrint(
-        '  - Color mode: ${_isMonochromatic ? "Monochrome" : "Full Color"}',
-      );
-      debugPrint('  - Orientation: $_pageOrientation');
-      debugPrint('  - Auto-fit: $_autoFit');
-      debugPrint('  - Brightness: ${(_brightness * 100).round()}%');
-      debugPrint('  - Contrast: ${(_contrast * 100).round()}%');
-
-      final breakdown = enhancedCostBreakdown;
-      debugPrint('Cost Analysis:');
-      breakdown.forEach((key, value) {
-        debugPrint('  - $key: ₹${value.toStringAsFixed(2)}');
-      });
-
-      debugPrint('Total Cost: ₹${totalCost.toStringAsFixed(2)}');
-      debugPrint('========================');
-
-      // Simulate print processing with progress
-      for (int i = 0; i < 3; i++) {
-        await Future.delayed(const Duration(milliseconds: 200));
-        debugPrint('Processing... ${((i + 1) / 3 * 100).round()}%');
-      }
-    } catch (e) {
-      debugPrint('Print error: $e');
-      rethrow;
-    }
+  // Manual payment verification (for testing)
+  void forceVerifyPayment() {
+    _isPaymentVerified = true;
+    _isVerifyingPayment = false;
+    notifyListeners();
+    debugPrint('✓ Payment manually verified');
   }
 
-  // Reset all settings
+  // Reset settings
   void resetSettings() {
-    _batchUpdate(() {
-      _numberOfCopies = 1;
-      _isMonochromatic = false;
-      _pageOrientation = 'portrait';
-      _autoFit = true;
-      _brightness = 0.0;
-      _contrast = 0.0;
-      _isPaymentVerified = false;
-      _isVerifyingPayment = false;
-      _pageSelections = List.filled(_totalPages, false);
-    });
+    _numberOfCopies = 1;
+    _isMonochromatic = false;
+    _pagesPerSheet = 1;
+    _pageOrientation = 'portrait';
+    _autoFit = true;
+    _brightness = 0.0;
+    _contrast = 0.0;
+    _isPaymentVerified = false;
+    _isVerifyingPayment = false;
+    _pageSelections = List.filled(_totalPages, false);
+    notifyListeners();
   }
 
-  // Enhanced validation methods
-  bool get canPrint {
-    return _isPaymentVerified &&
-        _numberOfCopies > 0 &&
-        !_isVerifyingPayment &&
-        _totalPages > 0;
-  }
-
-  String _getCannotPrintReason() {
-    if (!_isPaymentVerified) return 'Payment not verified';
-    if (_isVerifyingPayment) return 'Payment verification in progress';
-    if (_numberOfCopies <= 0) return 'Invalid number of copies';
-    if (_totalPages <= 0) return 'No pages to print';
-    return 'Unknown reason';
-  }
-
-  bool get hasUnsavedChanges {
-    return _numberOfCopies != 1 ||
-        _isMonochromatic != false ||
-        _brightness != 0.0 ||
-        _contrast != 0.0 ||
-        _pageSelections.any((selected) => selected);
-  }
-
-  String get paymentStatusMessage {
-    if (_isVerifyingPayment) {
-      return 'Verifying payment...';
-    } else if (_isPaymentVerified) {
-      return 'Payment verified successfully';
-    } else {
-      return 'Payment verification required';
-    }
+  // Reset only print settings (keep document info)
+  void resetPrintSettings() {
+    _numberOfCopies = 1;
+    _isMonochromatic = false;
+    _pagesPerSheet = 1;
+    _pageOrientation = 'portrait';
+    _autoFit = true;
+    _brightness = 0.0;
+    _contrast = 0.0;
+    notifyListeners();
   }
 
   // Enhanced cost breakdown
@@ -360,86 +272,79 @@ class PreviewViewModel extends ChangeNotifier {
     };
   }
 
-  // Export comprehensive settings
-  Map<String, dynamic> get enhancedSettingsSnapshot {
-    return {
-      'numberOfCopies': _numberOfCopies,
-      'isMonochromatic': _isMonochromatic,
-      'pageOrientation': _pageOrientation,
-      'autoFit': _autoFit,
-      'brightness': _brightness,
-      'contrast': _contrast,
-      'totalPages': _totalPages,
-      'selectedPages': _pageSelections,
-      'documentType': _documentType,
-      'totalCost': totalCost,
-      'costBreakdown': enhancedCostBreakdown,
-      'timestamp': DateTime.now().toIso8601String(),
-      'version': '2.0',
-    };
+  // Cost per sheet calculation
+  double get costPerSheet {
+    if (_pagesPerSheet == 0) return 0.0;
+    return totalCost / math.max(1, (_totalPages / _pagesPerSheet).ceil());
   }
 
-  // Import settings with validation
-  void applyEnhancedSettings(Map<String, dynamic> settings) {
-    try {
-      _batchUpdate(() {
-        _numberOfCopies = (settings['numberOfCopies'] as num?)?.toInt() ?? 1;
-        _isMonochromatic = settings['isMonochromatic'] as bool? ?? false;
-        _pageOrientation = settings['pageOrientation'] as String? ?? 'portrait';
-        _autoFit = settings['autoFit'] as bool? ?? true;
-        _brightness = (settings['brightness'] as num?)?.toDouble() ?? 0.0;
-        _contrast = (settings['contrast'] as num?)?.toDouble() ?? 0.0;
+  // Sheets count calculation
+  int get totalSheets => math.max(1, (_totalPages / _pagesPerSheet).ceil());
 
-        if (settings.containsKey('totalPages')) {
-          _totalPages = (settings['totalPages'] as num?)?.toInt() ?? 1;
-        }
+  // Print job summary
+  Map<String, dynamic> get printJobSummary => {
+    'totalPages': _totalPages,
+    'pagesPerSheet': _pagesPerSheet,
+    'totalSheets': totalSheets,
+    'copies': _numberOfCopies,
+    'isMonochromatic': _isMonochromatic,
+    'pageOrientation': _pageOrientation,
+    'autoFit': _autoFit,
+    'totalCost': totalCost,
+    'costBreakdown': enhancedCostBreakdown,
+  };
 
-        if (settings.containsKey('selectedPages')) {
-          final selections = settings['selectedPages'] as List?;
-          if (selections != null) {
-            _pageSelections = selections.cast<bool>();
-          }
-        }
+  // Validation methods
+  bool get isValidForPrint => _totalPages > 0 && _numberOfCopies > 0;
 
-        if (settings.containsKey('documentType')) {
-          _documentType = settings['documentType'] as String? ?? 'photo';
-        }
-      });
-    } catch (e) {
-      debugPrint('Error applying settings: $e');
+  String? get printValidationError {
+    if (_totalPages <= 0) return 'No pages to print';
+    if (_numberOfCopies <= 0) return 'Number of copies must be greater than 0';
+    if (!_isPaymentVerified) return 'Payment not verified';
+    return null;
+  }
+
+  // State management helpers
+  void startUpdate() {
+    if (!_isUpdating) {
+      _isUpdating = true;
+      notifyListeners();
     }
   }
 
-  // Quality preset shortcuts
-  void setDraftQuality() => applyPreset('draft');
-  void setNormalQuality() => applyPreset('normal');
-  void setHighQuality() => applyPreset('high_quality');
-  void setEconomicalMode() => applyPreset('economical');
-
-  // Bulk operations
-  void bulkSetCopies(List<int> pageIndices, int copies) {
-    // This would be implemented in the UI layer
-    // as it affects individual page settings
-    notifyListeners();
+  void endUpdate() {
+    if (_isUpdating) {
+      _isUpdating = false;
+      notifyListeners();
+    }
   }
 
-  void bulkToggleColor(List<int> pageIndices) {
-    // This would be implemented in the UI layer
-    notifyListeners();
+  void batchUpdate(Function() updates) {
+    startUpdate();
+    try {
+      updates();
+    } finally {
+      endUpdate();
+    }
   }
 
-  // Statistics and analytics
-  Map<String, dynamic> get printingStatistics {
-    return {
-      'totalSheets': _totalPages * _numberOfCopies,
-      'estimatedPrintTime':
-          '${(_totalPages * _numberOfCopies * 0.5).ceil()} seconds',
-      'paperUsage': '${_totalPages * _numberOfCopies} sheets',
-      'inkUsage': _isMonochromatic ? 'Low (B&W)' : 'Medium (Color)',
-      'costPerPage':
-          '₹${(totalCost / (_totalPages * _numberOfCopies)).toStringAsFixed(2)}',
-    };
-  }
+  // Debug information
+  Map<String, dynamic> get debugInfo => {
+    'numberOfCopies': _numberOfCopies,
+    'isMonochromatic': _isMonochromatic,
+    'pagesPerSheet': _pagesPerSheet,
+    'pageOrientation': _pageOrientation,
+    'autoFit': _autoFit,
+    'brightness': _brightness,
+    'contrast': _contrast,
+    'isPaymentVerified': _isPaymentVerified,
+    'isVerifyingPayment': _isVerifyingPayment,
+    'totalPages': _totalPages,
+    'selectedPagesCount': selectedPagesCount,
+    'documentType': _documentType,
+    'totalCost': totalCost,
+    'isUpdating': _isUpdating,
+  };
 
   @override
   void dispose() {
